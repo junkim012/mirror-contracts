@@ -19,6 +19,7 @@ Mirror depends on [Terraswap](https://terraswap.io) and uses its [implementation
 | [`mirror_mint`](./contracts/mirror_mint)            | [doc](https://docs.mirror.finance/contracts/mint)      | Handles CDP creation, management and liquidation                                                                                   |
 | [`mirror_oracle`](./contracts/mirror_oracle)        | [doc](https://docs.mirror.finance/contracts/oracle)    | Provides interface for oracle feeders to post prices for mAssets                                                                   |
 | [`mirror_staking`](./contracts/mirror_staking)      | [doc](https://docs.mirror.finance/contracts/staking)   | Distributes MIR rewards from block reward to LP stakers                                                                            |
+| [`mirror_limit_order`](./contracts/mirror_limit_order)      | [doc](https://docs.mirror.finance/contracts/limit-order)   | Provides limit order interface to a bidder and provide arbitrage opportunity to a market maker                         |
 
 ## Development
 
