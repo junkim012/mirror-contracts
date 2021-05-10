@@ -50,7 +50,7 @@ pub fn load_price<S: Storage, A: Api, Q: Querier>(
             let quote_price = if config.base_denom == quote_asset {
                 Decimal::one()
             } else {
-                query_price(deps, oracle, config.base_denom, quote_asset, block_time)?
+                query_price(deps, oracle, quote_asset, config.base_denom, block_time)?
             };
 
             decimal_division(base_end_price, quote_price)
@@ -58,7 +58,7 @@ pub fn load_price<S: Storage, A: Api, Q: Querier>(
             let base_price = if config.base_denom == base_asset {
                 Decimal::one()
             } else {
-                query_price(deps, oracle, config.base_denom, base_asset, block_time)?
+                query_price(deps, oracle, base_asset, config.base_denom, block_time)?
             };
 
             decimal_division(base_price, quote_end_price)
