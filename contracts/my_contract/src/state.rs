@@ -51,21 +51,24 @@ pub struct Event {
     pub strike_price: Uint128,
     pub start_time: Uint128, 
     pub end_time: Uint128, 
-    pub expiration_date: 
+    pub expiration_date: Uint128, 
     pub option_one_shares: Uint128,
     pub option_two_shares: Uint128,
     pub option_one_deposit: Uint128,
     pub option_two_deposit: Uint128,
+    pub winning_option: WagerOption
     // TODO: what type should the key be? 
-    pub wagers: Map<&[u8], Vec<Wager>> // Map of <K: addr, V: Vec<Wager>> 
+    pub WAGERS: Map<&[u8], Wager> // Map of <K: addr, V: Vec<Wager>> 
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Wager { 
     pub user_addr: CanonicalAddr, 
     pub wager_option: WagerOption,
-    pub num_shares: Uint128, 
-    pub deposit_amount: Uint128
+    pub option_one_shares: Uint128,
+    pub option_two_shares: Uint128, 
+    pub option_one_deposits: Uint128,
+    pub option_two_deposits: Uint128,
 }
 
 pub enum Status {

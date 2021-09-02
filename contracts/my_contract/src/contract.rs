@@ -61,7 +61,8 @@ pub fn instantiate(
     config_store(deps.storage).save(&config)?;
     state_store(deps.storage).save(&state)?;
 
-    
+    // TODO: global variable for keeping track of EVENTS
+    let EVENTS: Map<&[u8], Event> = Map::new(b"events");
 
     Ok(Response::default())
 }
@@ -103,12 +104,12 @@ pub fn create_event(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    event_id,
-    strike_price,
-    asset_name,
-    start_time,
-    end_time,
-    expiration_date,
+    event_id: u64,
+    strike_price: Uint128,
+    asset_name: String,
+    start_time: Uint128,
+    end_time: Uint128,
+    expiration_date: Uint128,
     creator
 ) -> StdResult<Response> {
     let config: Config = config_read(deps.storage).load()?;
@@ -134,7 +135,101 @@ pub fn create_event(
     }
 
     // save event to Events vector
+    // TODO: how to save event_id as binary
+    EVENTS.save(&mut deps.storage, b&event_id, event)?; 
+}
 
+pub fn deposit_wager(
+    deps: DepsMut, 
+    env: Env,
+    info: MessageInfo,
+    user_addr: CanonicalAddr,
+    event_id: u64,
+    amount: Uint128,
+    wager_option: WagerOption, 
+) -> StdResult<Response> {
+
+
+    // find the Event based on event Id on EVENTS map
+    // modify the Event's wagers map 
+    let updateEvents = |id: Option<Vec<Event>>, | -> StdResult<Vec<Event>> {
+        match id { // match event_id to Event 
+            Some(one) => match one.WAGERS {
+                Some(two) => Ok( {
+
+                })
+
+                
+            }
+            Ok(Event {
+
+
+            }),
+            None => Ok(Event { 
+
+            })
+        }
+    }
+
+    EVENTS.update(&mut deps.storage, b&event_id, updateEvents);
+
+}
+
+pub fn claim_reward(
+    deps: DepsMut,
+    env: Env, 
+    info: MessageInfo, 
+    // user_addr: CanonicalAddr,
+    event_id: u64, 
+) -> StdResult<u64> {
+
+    let user_addr = deps.api.addr_canonicalize(info.sender.as_str())?;
+
+    // check if event_id exists
+    let event = EVENTS.may_load(&deps.storage, b&event_id)?;
+    if (event == None) {
+        // return event_id doesn't exist error 
+        return Err(StdError::generic_err("event id does not exist"));
+    }
+
+    // check if event has expired
+    if (event.status !== Status::EXPIRED) {
+        // return event not yet expired error 
+        return Err(StdError::generic_err("event not yet expired"));
+    }
+
+    // get Event's WAGERS map
+    // find user address key and get Vec<Wager> value
+    let wager = event.WAGERS.may_load(&deps.storage, b&user_addr)?;
+
+    if (wager == None) {
+        // return user does not have wager error 
+        return Err(StdError::generic_err("user does not have wager"));
+    }
+
+    let mut winning_shares = Uint128::zero();
+    if (event.winning_option == WagerOption::ONE) {
+        winning_shares = wager.option_one_shares;
+    }
+    if (event.winning_option == WagerOption::TWO) {
+        winning_shares = wager.option_two_shares; 
+    }
+
+    // distribute a dollar per winning share
+    //  execute send ust to address
+    Ok(Response::new()
+        .add_message(CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: info.sender.as_str()?; // non-canonical, as string
+            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+                recipient: info.sender.to_string(),
+                amount: winning_shares,
+            })?,
+            // funds: vec![], ?
+        }))
+        .add_attributes(vec![
+            attr("action", "claim rewards"),
+            attr("amount", winning_shares.to_string())
+        ]))
 
 }
 
