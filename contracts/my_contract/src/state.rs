@@ -3,6 +3,9 @@ use cosmwasm_storage::{
     bucket, bucket_read, singleton, singleton_read, Bucket, ReadonlyBucket, ReadonlySingleton,
     Singleton,
 };
+
+
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +45,11 @@ pub struct State {
 //     pub participated_polls: Vec<u64>,          // poll_id
 // }
 
+// TODO: global variable for keeping track of EVENTS
+// Map<event_id, Event> 
+pub const EVENTS: Storage::Map<&[u8], Event> = Storage::Map::new(b"events");
+
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Event {
     pub event_id: u64,
@@ -56,7 +64,7 @@ pub struct Event {
     pub option_two_shares: Uint128,
     pub option_one_deposit: Uint128,
     pub option_two_deposit: Uint128,
-    pub winning_option: WagerOption
+    pub winning_option: WagerOption,
     // TODO: what type should the key be? 
     pub WAGERS: Map<&[u8], Wager> // Map of <K: addr, V: Vec<Wager>> 
 }
@@ -72,14 +80,14 @@ pub struct Wager {
 }
 
 pub enum Status {
-    pub OPEN,
-    pub CLOSED,
-    pub EXPIRED,
+    OPEN,
+    CLOSED,
+    EXPIRED,
 }
 
 pub enum WagerOption {
-    pub ONE,
-    pub TWO
+    ONE,
+    TWO
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

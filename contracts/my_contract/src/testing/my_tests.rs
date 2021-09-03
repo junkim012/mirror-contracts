@@ -20,32 +20,25 @@ use mirror_protocol::gov::{
     StateResponse, VoteOption, VoterInfo, VotersResponse, VotersResponseItem,
 };
 
-const VOTING_TOKEN: &str = "voting_token";
+const LUX_TOKEN: &str = "lux_token";
 const TEST_CREATOR: &str = "creator";
-const TEST_VOTER: &str = "voter1";
-const TEST_VOTER_2: &str = "voter2";
-const TEST_VOTER_3: &str = "voter3";
-const TEST_COLLECTOR: &str = "collector";
-const DEFAULT_QUORUM: u64 = 30u64;
-const DEFAULT_THRESHOLD: u64 = 50u64;
-const DEFAULT_VOTING_PERIOD: u64 = 10000u64;
-const DEFAULT_EFFECTIVE_DELAY: u64 = 10000u64;
-const DEFAULT_PROPOSAL_DEPOSIT: u128 = 10000000000u128;
-const DEFAULT_VOTER_WEIGHT: Decimal = Decimal::zero();
-const DEFAULT_SNAPSHOT_PERIOD: u64 = 10u64;
+// const TEST_VOTER: &str = "voter1";
+// const TEST_VOTER_2: &str = "voter2";
+// const TEST_VOTER_3: &str = "voter3";
+// const TEST_COLLECTOR: &str = "collector";
+// const DEFAULT_QUORUM: u64 = 30u64;
+// const DEFAULT_THRESHOLD: u64 = 50u64;
+// const DEFAULT_VOTING_PERIOD: u64 = 10000u64;
+// const DEFAULT_EFFECTIVE_DELAY: u64 = 10000u64;
+// const DEFAULT_PROPOSAL_DEPOSIT: u128 = 10000000000u128;
+// const DEFAULT_VOTER_WEIGHT: Decimal = Decimal::zero();
+// const DEFAULT_SNAPSHOT_PERIOD: u64 = 10u64;
 
 fn mock_instantiate(deps: DepsMut) {
     let msg = InstantiateMsg {
-        mirror_token: VOTING_TOKEN.to_string(),
-        quorum: Decimal::percent(DEFAULT_QUORUM),
-        threshold: Decimal::percent(DEFAULT_THRESHOLD),
-        voting_period: DEFAULT_VOTING_PERIOD,
-        effective_delay: DEFAULT_EFFECTIVE_DELAY,
-        proposal_deposit: Uint128::new(DEFAULT_PROPOSAL_DEPOSIT),
-        voter_weight: DEFAULT_VOTER_WEIGHT,
-        snapshot_period: DEFAULT_SNAPSHOT_PERIOD,
+        lux_token: LUX_TOKEN.to_string(),
+        owner: TEST_CREATOR.to_string()
     };
-
     let info = mock_info(TEST_CREATOR, &[]);
     let _res = instantiate(deps, mock_env(), info, msg)
         .expect("contract successfully handles InstantiateMsg");
@@ -60,23 +53,16 @@ fn mock_env_height(height: u64, time: u64) -> Env {
 
 fn init_msg() -> InstantiateMsg {
     InstantiateMsg {
-        mirror_token: VOTING_TOKEN.to_string(),
-        quorum: Decimal::percent(DEFAULT_QUORUM),
-        threshold: Decimal::percent(DEFAULT_THRESHOLD),
-        voting_period: DEFAULT_VOTING_PERIOD,
-        effective_delay: DEFAULT_EFFECTIVE_DELAY,
-        proposal_deposit: Uint128::new(DEFAULT_PROPOSAL_DEPOSIT),
-        voter_weight: DEFAULT_VOTER_WEIGHT,
-        snapshot_period: DEFAULT_SNAPSHOT_PERIOD,
+        lux_token: LUX_TOKEN.to_string(),
+        owner: TEST_CREATOR.to_string()
     }
 }
 
 #[test]
 fn proper_initialization() {
     let mut deps = mock_dependencies(&[]);
-
     let msg = init_msg();
-    let info = mock_info(TEST_CREATOR, &coins(2, VOTING_TOKEN));
+    let info = mock_info(TEST_CREATOR, &coins(2, LUX_TOKEN));
     let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
@@ -84,16 +70,8 @@ fn proper_initialization() {
     assert_eq!(
         config,
         Config {
-            mirror_token: deps.api.addr_canonicalize(VOTING_TOKEN).unwrap(),
+            lux_token: deps.api.addr_canonicalize(LUX_TOKEN).unwrap(),
             owner: deps.api.addr_canonicalize(TEST_CREATOR).unwrap(),
-            quorum: Decimal::percent(DEFAULT_QUORUM),
-            threshold: Decimal::percent(DEFAULT_THRESHOLD),
-            voting_period: DEFAULT_VOTING_PERIOD,
-            effective_delay: DEFAULT_EFFECTIVE_DELAY,
-            proposal_deposit: Uint128::new(DEFAULT_PROPOSAL_DEPOSIT),
-            voter_weight: DEFAULT_VOTER_WEIGHT,
-            snapshot_period: DEFAULT_SNAPSHOT_PERIOD,
-            expiration_period: 0u64, // depcrecated
         }
     );
 
@@ -102,13 +80,149 @@ fn proper_initialization() {
         state,
         State {
             contract_addr: deps.api.addr_canonicalize(MOCK_CONTRACT_ADDR).unwrap(),
-            poll_count: 0,
+            event_count: 0,
             total_share: Uint128::zero(),
             total_deposit: Uint128::zero(),
-            pending_voting_rewards: Uint128::zero(),
         }
     );
 }
+
+fn create_event_msg(
+    event_id: u64,
+    strike_price: Uint128,
+    asset_name: String,
+    start_time: Uint128,
+    end_time: Uint128,
+    expiration_date: Uint128,
+    owner: CanonicalAddr, 
+    execute_msg: Option<PollExecuteMsg>,
+) -> ExecuteMsg {
+    // TODO: How to create message other than Cw20ReceiveMsg? 
+    ExecuteMsg::Receive(Cw20ExecuteMsg {
+        sender: owner.to_string(),
+        // amount: Uint128::new(DEFAULT_PROPOSAL_DEPOSIT),
+        msg: to_binary(&Cw20HookMsg::CreatePoll {
+            event_id,
+            strike_price,
+            asset_name,
+            start_time,
+            end_time,
+            expiration_date,
+            owner,
+            execute_msg,
+        })
+        .unwrap(),
+    })
+}
+
+fn create_deposit_wager_msg(
+    event_id: u64,
+    amount: Uint128,
+    wager_option: WagerOption,
+    execute_msg: Option<PollExecuteMsg>,
+) -> ExecuteMsg {
+    // TODO: How to create message other than Cw20ReceiveMsg? 
+    ExecuteMsg::Receive(Cw20ExecuteMsg {
+        sender: owner.to_string(),
+        // amount: Uint128::new(DEFAULT_PROPOSAL_DEPOSIT),
+        msg: to_binary(&Cw20HookMsg::CreatePoll {
+            event_id,
+            amount,
+            wager_option,
+            execute_msg,
+        })
+        .unwrap(),
+    })
+}
+
+
+#[test]
+fn create_event_test() {
+    let mut deps = mock_dependencies(&[]);
+    mock_instantiate(deps.as_mut()); 
+
+    // create an event msg 
+    let msg = create_event_msg(
+        1, // event_id
+        100, // strike price 
+        "luna".to_string(), // asset name 
+        1, // start time
+        2, // end time 
+        3, // expiration date 
+        "Alice".to_string(), // owner 
+        None // msg 
+    );
+
+    // execute an event msg
+    let info = mock_info(LUX_TOKEN, &[]);
+    let execute_res = execute(deps.as_mut(), mock_env(), info.clone(), msg);
+    // match execute_res {
+    //     // Ok(_) => panic!("Must return error"),
+    //     Err(StdError::GenericErr { msg, .. }) => assert_eq!(msg, "some error in create_event"),
+    //     Err(_) => panic!("Unknown error"),
+    // }
+
+    assert_eq!(
+        // TODO: Question: how to return these attr from contract
+        execute_res.attributes,
+        vec![
+            attr("action", "create_event"),
+            attr("event_id", "1"),
+            attr("strike_price", "100"),
+            attr("asset_name", "luna"),
+            attr("start_time", "1"), 
+            attr("end_time", "2"),
+            attr("expiration_date", "3"),
+            attr("owner", "Alice".to_string()),
+        ]
+    )
+
+    // TODO: Question: how to see if the event exists in EVENTS Map 
+    // query it? deps.storage? 
+
+    // see if the event is in EVENTS
+    // see if the event has correct variable values 
+}
+
+fn deposit_wager_test() {
+    // create deposits(buy shares) of each option 
+    let mut deps = mock_dependencies(&[]);
+    mock_instantiate(deps.as_mut()); 
+
+    // create a deposit_wager msg
+    let msg = create_deposit_wager_msg(
+        1,
+        10000000,
+        WagerOption::ONE,
+        None,
+    )
+    let execute_res = execute(deps.as_mut(), mock_env(), info.clone(), msg)
+    match execute_res {
+        Ok(_) => assert_eq!()
+    }
+
+    assert_eq!(
+        execute_res.attributes,
+        vec![
+            attr("action", "deposit_wager"),
+            attr("event_id", "1"),
+            attr("amount", "10000000"),
+            attr("wager_option", "ONE")
+        ]
+    )
+
+    // see if the event's WAGERS map has the correct values 
+
+}
+
+fn claim_reward_test() {
+    // create event
+
+    // deposit wager
+
+    // 
+}
+
 
 #[test]
 fn poll_not_found() {

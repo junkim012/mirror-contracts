@@ -1,21 +1,25 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 
+// use cw_storage_plus::Item;
+// use cw_storage_plus::Map;
+
 use crate::querier::load_token_balance;
-use crate::staking::{
-    deposit_reward, query_shares, query_staker, stake_voting_rewards, stake_voting_tokens,
-    withdraw_voting_rewards, withdraw_voting_tokens,
-};
+// use crate::staking::{
+//     deposit_reward, query_shares, query_staker, stake_voting_rewards, stake_voting_tokens,
+//     withdraw_voting_rewards, withdraw_voting_tokens,
+// };
 use crate::state::{
     bank_read, bank_store, config_read, config_store, poll_indexer_store, poll_read, poll_store,
     poll_voter_read, poll_voter_store, read_poll_voters, read_polls, read_tmp_poll_id, state_read,
-    state_store, store_tmp_poll_id, Config, ExecuteData, Poll, State,
+    state_store, store_tmp_poll_id, Config, ExecuteData, Event, Wager, Status, WagerOption, State,
 };
 
 use cosmwasm_std::{
     attr, from_binary, to_binary, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo,
-    Reply, ReplyOn, Response, StdError, StdResult, SubMsg, Uint128, WasmMsg,
+    Reply, ReplyOn, Response, StdError, StdResult, SubMsg, Uint128, WasmMsg, Storage
 };
+
 use cw20::{Cw20ExecuteMsg, Cw20ReceiveMsg};
 
 use mirror_protocol::common::OrderBy;
@@ -23,6 +27,11 @@ use mirror_protocol::gov::{
     ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, MigrateMsg, PollExecuteMsg,
     PollResponse, PollStatus, PollsResponse, QueryMsg, StateResponse, VoteOption, VoterInfo,
     VotersResponse, VotersResponseItem,
+};
+
+use terraswap::{
+    asset::{Asset, AssetInfo}, 
+    querier::query_balance, 
 };
 
 // const MIN_TITLE_LENGTH: usize = 4;
@@ -61,16 +70,13 @@ pub fn instantiate(
     config_store(deps.storage).save(&config)?;
     state_store(deps.storage).save(&state)?;
 
-    // TODO: global variable for keeping track of EVENTS
-    let EVENTS: Map<&[u8], Event> = Map::new(b"events");
-
     Ok(Response::default())
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> StdResult<Response> {
     match msg {
-        ExecuteMsg::Receive(msg) => receive_cw20(deps, env, info, msg),
+        // ExecuteMsg::Receive(msg) => receive_cw20(deps, env, info, msg),
         ExecuteMsg::UpdateConfig {
             owner
         } => update_config(
@@ -110,12 +116,18 @@ pub fn create_event(
     start_time: Uint128,
     end_time: Uint128,
     expiration_date: Uint128,
-    creator
 ) -> StdResult<Response> {
+
     let config: Config = config_read(deps.storage).load()?;
+    let creator = deps.api.addr_canonicalize(info.sender.as_str())?;
+
+    let mut state: State = state_store(deps.storage).load()?;
+    let event_id = state.event_count + 1; 
+
+    state.poll_count += 1;
 
     // create a new Event
-    let WAGERS: Map<&[u8], Vec<Wager>> = Map::new();
+    let WAGERS: Storage::Map<&[u8], Vec<Wager>> = Storage::Map::new();
     let event = Event {
         event_id: event_id, 
         creator: creator,
@@ -130,48 +142,74 @@ pub fn create_event(
         option_two_shares: Uint128::zero(),
         option_one_deposit: Uint128::zero(),
         option_two_deposit: Uint128::zero(),
-
         wagers: WAGERS
-    }
+    };
 
     // save event to Events vector
     // TODO: how to save event_id as binary
-    EVENTS.save(&mut deps.storage, b&event_id, event)?; 
+    EVENTS.save(&mut deps.storage, event_id, event)?; 
+
+    // returning a response with attributes
+    // TODO: difference between add_messages? 
+    // Ok(Response::new().add_messages(messages).add_attributes(vec![
+    let r = Response::new().add_attributes(vec![
+        attr("action", "create_event"),
+        attr("event_id", event_id.to_string()),
+        attr("strike_price", "100"),
+        attr("asset_name", "luna"),
+        attr("start_time", "1"), 
+        attr("end_time", "2"),
+        attr("expiration_date", "3"),
+        attr("owner", "Alice".to_string()),
+    ]);
+
+    Ok(r)
+
 }
 
 pub fn deposit_wager(
     deps: DepsMut, 
     env: Env,
     info: MessageInfo,
-    user_addr: CanonicalAddr,
     event_id: u64,
     amount: Uint128,
     wager_option: WagerOption, 
 ) -> StdResult<Response> {
 
+    let user_addr = deps.api.addr_canonicalize(info.sender.as_str())?;
 
     // find the Event based on event Id on EVENTS map
     // modify the Event's wagers map 
     let updateEvents = |id: Option<Vec<Event>>, | -> StdResult<Vec<Event>> {
-        match id { // match event_id to Event 
-            Some(one) => match one.WAGERS {
-                Some(two) => Ok( {
+        // match id { // match event_id to Event 
+        //     Some(one) => match one.WAGERS {
+        //         Some(two) => Ok( {
 
-                })
+        //         })
 
                 
-            }
-            Ok(Event {
+        //     }
+        //     Ok(Event {
 
 
-            }),
-            None => Ok(Event { 
+        //     }),
+        //     None => Ok(Event { 
 
-            })
-        }
-    }
+        //     })
+        // }
+    };
 
-    EVENTS.update(&mut deps.storage, b&event_id, updateEvents);
+    // TODO: Question: does event_id need to be turned to bytecode? 
+    EVENTS.update(&mut deps.storage, event_id, updateEvents);
+
+    let r = Response::new().add_attributes(vec![
+        attr("action", "deposit_wager"),
+        attr("event_id", event_id.to_string()),
+        attr("amount", amount.to_string()),
+        attr("wager_option", wager_option.to_string()),
+    ]);
+
+    Ok(r)
 
 }
 
@@ -186,21 +224,21 @@ pub fn claim_reward(
     let user_addr = deps.api.addr_canonicalize(info.sender.as_str())?;
 
     // check if event_id exists
-    let event = EVENTS.may_load(&deps.storage, b&event_id)?;
+    let event = EVENTS.may_load(&deps.storage, event_id)?;
     if (event == None) {
         // return event_id doesn't exist error 
         return Err(StdError::generic_err("event id does not exist"));
     }
 
     // check if event has expired
-    if (event.status !== Status::EXPIRED) {
+    if (event.status != Status::EXPIRED) {
         // return event not yet expired error 
         return Err(StdError::generic_err("event not yet expired"));
     }
 
     // get Event's WAGERS map
     // find user address key and get Vec<Wager> value
-    let wager = event.WAGERS.may_load(&deps.storage, b&user_addr)?;
+    let wager = event.WAGERS.may_load(&deps.storage, user_addr)?;
 
     if (wager == None) {
         // return user does not have wager error 
@@ -217,87 +255,101 @@ pub fn claim_reward(
 
     // distribute a dollar per winning share
     //  execute send ust to address
+    // create the native asset, and then do asset.into_msg(..)
+
+    // create the native asset, add to message with into_msg
+    let reward_asset = Asset {
+        info: AssetInfo::NativeToken {
+            denom: "uust"
+        },
+        amount: Uint128::from(winning_shares)
+    };
+
+    if reward_asset.is_zero() {
+        return Err(StdError::generic_err(
+            "No winning shares and claimable rewards"
+        ));
+    }
+
+    let tax_amount: Uint128 = reward_asset.compute_tax(&deps.querier)?;
+
     Ok(Response::new()
-        .add_message(CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: info.sender.as_str()?; // non-canonical, as string
-            msg: to_binary(&Cw20ExecuteMsg::Transfer {
-                recipient: info.sender.to_string(),
-                amount: winning_shares,
-            })?,
-            // funds: vec![], ?
-        }))
         .add_attributes(vec![
             attr("action", "claim rewards"),
             attr("amount", winning_shares.to_string())
-        ]))
+        ])
+        .add_message(reward_asset.into_msg(&deps.querier, info.sender)?))
+
+        // .add_message(CosmosMsg::Wasm(WasmMsg::Execute {
+        //     contract_addr: info.sender.as_str()?, // non-canonical, as string
+        //     msg: to_binary(&Cw20ExecuteMsg::Transfer {
+        //         recipient: info.sender.to_string(),
+        //         amount: winning_shares,
+        //     })?,
+        //     // funds: vec![], ?
+        // }))
 
 }
 
-pub fn receive_cw20(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    cw20_msg: Cw20ReceiveMsg,
-) -> StdResult<Response> {
-    // only asset contract can execute this message
-    let config: Config = config_read(deps.storage).load()?;
-    if config.mirror_token != deps.api.addr_canonicalize(info.sender.as_str())? {
-        return Err(StdError::generic_err("unauthorized"));
-    }
+// pub fn receive_cw20(
+//     deps: DepsMut,
+//     env: Env,
+//     info: MessageInfo,
+//     cw20_msg: Cw20ReceiveMsg,
+// ) -> StdResult<Response> {
+//     // only asset contract can execute this message
+//     let config: Config = config_read(deps.storage).load()?;
+//     if config.mirror_token != deps.api.addr_canonicalize(info.sender.as_str())? {
+//         return Err(StdError::generic_err("unauthorized"));
+//     }
 
-    match from_binary(&cw20_msg.msg) {
-        Ok(Cw20HookMsg::StakeVotingTokens {}) => {
-            stake_voting_tokens(deps, cw20_msg.sender, cw20_msg.amount)
-        }
-        Ok(Cw20HookMsg::CreatePoll {
-            title,
-            description,
-            link,
-            execute_msg,
-        }) => create_poll(
-            deps,
-            env,
-            cw20_msg.sender,
-            cw20_msg.amount,
-            title,
-            description,
-            link,
-            execute_msg,
-        ),
-        Ok(Cw20HookMsg::DepositReward {}) => {
-            // only reward token contract can execute this message
-            if config.mirror_token != deps.api.addr_canonicalize(info.sender.as_str())? {
-                return Err(StdError::generic_err("unauthorized"));
-            }
-            deposit_reward(deps, cw20_msg.amount)
-        }
-        Err(_) => Err(StdError::generic_err("data should be given")),
-    }
-}
+//     match from_binary(&cw20_msg.msg) {
+//         Ok(Cw20HookMsg::StakeVotingTokens {}) => {
+//             stake_voting_tokens(deps, cw20_msg.sender, cw20_msg.amount)
+//         }
+//         Ok(Cw20HookMsg::CreatePoll {
+//             title,
+//             description,
+//             link,
+//             execute_msg,
+//         }) => create_poll(
+//             deps,
+//             env,
+//             cw20_msg.sender,
+//             cw20_msg.amount,
+//             title,
+//             description,
+//             link,
+//             execute_msg,
+//         ),
+//         Ok(Cw20HookMsg::DepositReward {}) => {
+//             // only reward token contract can execute this message
+//             if config.mirror_token != deps.api.addr_canonicalize(info.sender.as_str())? {
+//                 return Err(StdError::generic_err("unauthorized"));
+//             }
+//             deposit_reward(deps, cw20_msg.amount)
+//         }
+//         Err(_) => Err(StdError::generic_err("data should be given")),
+//     }
+// }
 
-#[cfg_attr(not(feature = "library"), entry_point)]
-pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> StdResult<Response> {
-    match msg.id {
-        POLL_EXECUTE_REPLY_ID => {
-            let poll_id: u64 = read_tmp_poll_id(deps.storage)?;
-            failed_poll(deps, poll_id)
-        }
-        _ => Err(StdError::generic_err("reply id is invalid")),
-    }
-}
+// #[cfg_attr(not(feature = "library"), entry_point)]
+// pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> StdResult<Response> {
+//     match msg.id {
+//         POLL_EXECUTE_REPLY_ID => {
+//             let poll_id: u64 = read_tmp_poll_id(deps.storage)?;
+//             failed_poll(deps, poll_id)
+//         }
+//         _ => Err(StdError::generic_err("reply id is invalid")),
+//     }
+// }
 
 #[allow(clippy::too_many_arguments)]
 pub fn update_config(
     deps: DepsMut,
     info: MessageInfo,
     owner: Option<String>,
-    quorum: Option<Decimal>,
-    threshold: Option<Decimal>,
-    voting_period: Option<u64>,
-    effective_delay: Option<u64>,
-    proposal_deposit: Option<Uint128>,
-    voter_weight: Option<Decimal>,
-    snapshot_period: Option<u64>,
+    lux_token: String,
 ) -> StdResult<Response> {
     let api = deps.api;
     config_store(deps.storage).update(|mut config| {
@@ -309,499 +361,412 @@ pub fn update_config(
             config.owner = api.addr_canonicalize(&owner)?;
         }
 
-        if let Some(quorum) = quorum {
-            validate_quorum(quorum)?;
-            config.quorum = quorum;
+        if let Some(lux_token) = lux_token {
+            validate_lux_token(lux_token)?;
+            config.lux_token = lux_token;
         }
-
-        if let Some(threshold) = threshold {
-            validate_threshold(threshold)?;
-            config.threshold = threshold;
-        }
-
-        if let Some(voting_period) = voting_period {
-            config.voting_period = voting_period;
-        }
-
-        if let Some(effective_delay) = effective_delay {
-            config.effective_delay = effective_delay;
-        }
-
-        if let Some(proposal_deposit) = proposal_deposit {
-            config.proposal_deposit = proposal_deposit;
-        }
-
-        if let Some(voter_weight) = voter_weight {
-            validate_voter_weight(voter_weight)?;
-            config.voter_weight = voter_weight;
-        }
-
-        if let Some(snapshot_period) = snapshot_period {
-            config.snapshot_period = snapshot_period;
-        }
-
         Ok(config)
     })?;
     Ok(Response::default())
 }
 
-/// validate_title returns an error if the title is invalid
-fn validate_title(title: &str) -> StdResult<()> {
-    if title.len() < MIN_TITLE_LENGTH {
-        Err(StdError::generic_err("Title too short"))
-    } else if title.len() > MAX_TITLE_LENGTH {
-        Err(StdError::generic_err("Title too long"))
-    } else {
-        Ok(())
-    }
-}
-
-/// validate_description returns an error if the description is invalid
-fn validate_description(description: &str) -> StdResult<()> {
-    if description.len() < MIN_DESC_LENGTH {
-        Err(StdError::generic_err("Description too short"))
-    } else if description.len() > MAX_DESC_LENGTH {
-        Err(StdError::generic_err("Description too long"))
-    } else {
-        Ok(())
-    }
-}
-
-/// validate_link returns an error if the link is invalid
-fn validate_link(link: &Option<String>) -> StdResult<()> {
-    if let Some(link) = link {
-        if link.len() < MIN_LINK_LENGTH {
-            Err(StdError::generic_err("Link too short"))
-        } else if link.len() > MAX_LINK_LENGTH {
-            Err(StdError::generic_err("Link too long"))
-        } else {
-            Ok(())
-        }
-    } else {
-        Ok(())
-    }
-}
-
-/// validate_quorum returns an error if the quorum is invalid
-/// (we require 0-1)
-fn validate_quorum(quorum: Decimal) -> StdResult<()> {
-    if quorum > Decimal::one() {
-        Err(StdError::generic_err("quorum must be 0 to 1"))
-    } else {
-        Ok(())
-    }
-}
-
-/// validate_threshold returns an error if the threshold is invalid
-/// (we require 0-1)
-fn validate_threshold(threshold: Decimal) -> StdResult<()> {
-    if threshold > Decimal::one() {
-        Err(StdError::generic_err("threshold must be 0 to 1"))
-    } else {
-        Ok(())
-    }
-}
-
-pub fn validate_voter_weight(voter_weight: Decimal) -> StdResult<()> {
-    if voter_weight >= Decimal::one() {
-        Err(StdError::generic_err("voter_weight must be smaller than 1"))
-    } else {
-        Ok(())
-    }
+// validate_lux_token returns an error if the token is invalid 
+fn validate_lux_token(lux_token: String) -> StdResult<()> {
+    Ok()
 }
 
 /*
  * Creates a new poll
  */
-#[allow(clippy::too_many_arguments)]
-pub fn create_poll(
-    deps: DepsMut,
-    env: Env,
-    proposer: String,
-    deposit_amount: Uint128,
-    title: String,
-    description: String,
-    link: Option<String>,
-    poll_execute_msg: Option<PollExecuteMsg>,
-) -> StdResult<Response> {
-    validate_title(&title)?;
-    validate_description(&description)?;
-    validate_link(&link)?;
+// #[allow(clippy::too_many_arguments)]
+// pub fn create_poll(
+//     deps: DepsMut,
+//     env: Env,
+//     proposer: String,
+//     deposit_amount: Uint128,
+//     title: String,
+//     description: String,
+//     link: Option<String>,
+//     poll_execute_msg: Option<PollExecuteMsg>,
+// ) -> StdResult<Response> {
+//     validate_title(&title)?;
+//     validate_description(&description)?;
+//     validate_link(&link)?;
 
-    let config: Config = config_store(deps.storage).load()?;
-    if deposit_amount < config.proposal_deposit {
-        return Err(StdError::generic_err(format!(
-            "Must deposit more than {} token",
-            config.proposal_deposit
-        )));
-    }
+//     let config: Config = config_store(deps.storage).load()?;
+//     if deposit_amount < config.proposal_deposit {
+//         return Err(StdError::generic_err(format!(
+//             "Must deposit more than {} token",
+//             config.proposal_deposit
+//         )));
+//     }
 
-    let polls_in_progress: usize = read_polls(
-        deps.storage,
-        Some(PollStatus::InProgress),
-        None,
-        None,
-        None,
-        Some(true),
-    )?
-    .len();
-    if polls_in_progress.gt(&MAX_POLLS_IN_PROGRESS) {
-        return Err(StdError::generic_err("Too many polls in progress"));
-    }
+//     let polls_in_progress: usize = read_polls(
+//         deps.storage,
+//         Some(PollStatus::InProgress),
+//         None,
+//         None,
+//         None,
+//         Some(true),
+//     )?
+//     .len();
+//     if polls_in_progress.gt(&MAX_POLLS_IN_PROGRESS) {
+//         return Err(StdError::generic_err("Too many polls in progress"));
+//     }
 
-    let mut state: State = state_store(deps.storage).load()?;
-    let poll_id = state.poll_count + 1;
+//     let mut state: State = state_store(deps.storage).load()?;
+//     let poll_id = state.poll_count + 1;
 
-    // Increase poll count & total deposit amount
-    state.poll_count += 1;
-    state.total_deposit += deposit_amount;
+//     // Increase poll count & total deposit amount
+//     state.poll_count += 1;
+//     state.total_deposit += deposit_amount;
 
-    let poll_execute_data = if let Some(poll_execute_msg) = poll_execute_msg {
-        Some(ExecuteData {
-            contract: deps.api.addr_canonicalize(&poll_execute_msg.contract)?,
-            msg: poll_execute_msg.msg,
-        })
-    } else {
-        None
-    };
+//     let poll_execute_data = if let Some(poll_execute_msg) = poll_execute_msg {
+//         Some(ExecuteData {
+//             contract: deps.api.addr_canonicalize(&poll_execute_msg.contract)?,
+//             msg: poll_execute_msg.msg,
+//         })
+//     } else {
+//         None
+//     };
 
-    let sender_address_raw = deps.api.addr_canonicalize(&proposer)?;
-    let current_seconds = env.block.time.seconds();
-    let new_poll = Poll {
-        id: poll_id,
-        creator: sender_address_raw,
-        status: PollStatus::InProgress,
-        yes_votes: Uint128::zero(),
-        no_votes: Uint128::zero(),
-        abstain_votes: Uint128::zero(),
-        end_time: current_seconds + config.voting_period,
-        title,
-        description,
-        link,
-        execute_data: poll_execute_data,
-        deposit_amount,
-        total_balance_at_end_poll: None,
-        voters_reward: Uint128::zero(),
-        staked_amount: None,
-    };
+//     let sender_address_raw = deps.api.addr_canonicalize(&proposer)?;
+//     let current_seconds = env.block.time.seconds();
+//     let new_poll = Poll {
+//         id: poll_id,
+//         creator: sender_address_raw,
+//         status: PollStatus::InProgress,
+//         yes_votes: Uint128::zero(),
+//         no_votes: Uint128::zero(),
+//         abstain_votes: Uint128::zero(),
+//         end_time: current_seconds + config.voting_period,
+//         title,
+//         description,
+//         link,
+//         execute_data: poll_execute_data,
+//         deposit_amount,
+//         total_balance_at_end_poll: None,
+//         voters_reward: Uint128::zero(),
+//         staked_amount: None,
+//     };
 
-    poll_store(deps.storage).save(&poll_id.to_be_bytes(), &new_poll)?;
-    poll_indexer_store(deps.storage, &PollStatus::InProgress)
-        .save(&poll_id.to_be_bytes(), &true)?;
+//     poll_store(deps.storage).save(&poll_id.to_be_bytes(), &new_poll)?;
+//     poll_indexer_store(deps.storage, &PollStatus::InProgress)
+//         .save(&poll_id.to_be_bytes(), &true)?;
 
-    state_store(deps.storage).save(&state)?;
+//     state_store(deps.storage).save(&state)?;
 
-    let r = Response::new().add_attributes(vec![
-        attr("action", "create_poll"),
-        attr(
-            "creator",
-            deps.api.addr_humanize(&new_poll.creator)?.as_str(),
-        ),
-        attr("poll_id", &poll_id.to_string()),
-        attr("end_time", new_poll.end_time.to_string()),
-    ]);
-    Ok(r)
-}
+//     let r = Response::new().add_attributes(vec![
+//         attr("action", "create_poll"),
+//         attr(
+//             "creator",
+//             deps.api.addr_humanize(&new_poll.creator)?.as_str(),
+//         ),
+//         attr("poll_id", &poll_id.to_string()),
+//         attr("end_time", new_poll.end_time.to_string()),
+//     ]);
+//     Ok(r)
+// }
 
-/*
- * Ends a poll.
- */
-pub fn end_poll(deps: DepsMut, env: Env, poll_id: u64) -> StdResult<Response> {
-    let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
+// /*
+//  * Ends a poll.
+//  */
+// pub fn end_poll(deps: DepsMut, env: Env, poll_id: u64) -> StdResult<Response> {
+//     let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
 
-    if a_poll.status != PollStatus::InProgress {
-        return Err(StdError::generic_err("Poll is not in progress"));
-    }
+//     if a_poll.status != PollStatus::InProgress {
+//         return Err(StdError::generic_err("Poll is not in progress"));
+//     }
 
-    let current_seconds = env.block.time.seconds();
-    if a_poll.end_time > current_seconds {
-        return Err(StdError::generic_err("Voting period has not expired"));
-    }
+//     let current_seconds = env.block.time.seconds();
+//     if a_poll.end_time > current_seconds {
+//         return Err(StdError::generic_err("Voting period has not expired"));
+//     }
 
-    let no = a_poll.no_votes.u128();
-    let yes = a_poll.yes_votes.u128();
-    let abstain = a_poll.abstain_votes.u128();
+//     let no = a_poll.no_votes.u128();
+//     let yes = a_poll.yes_votes.u128();
+//     let abstain = a_poll.abstain_votes.u128();
 
-    let tallied_weight = yes + no + abstain;
+//     let tallied_weight = yes + no + abstain;
 
-    let mut poll_status = PollStatus::Rejected;
-    let mut rejected_reason = "";
-    let mut passed = false;
+//     let mut poll_status = PollStatus::Rejected;
+//     let mut rejected_reason = "";
+//     let mut passed = false;
 
-    let mut messages: Vec<CosmosMsg> = vec![];
-    let config: Config = config_read(deps.storage).load()?;
-    let mut state: State = state_read(deps.storage).load()?;
+//     let mut messages: Vec<CosmosMsg> = vec![];
+//     let config: Config = config_read(deps.storage).load()?;
+//     let mut state: State = state_read(deps.storage).load()?;
 
-    let (quorum, staked_weight) = if state.total_share.u128() == 0 {
-        (Decimal::zero(), Uint128::zero())
-    } else if let Some(staked_amount) = a_poll.staked_amount {
-        (
-            Decimal::from_ratio(tallied_weight, staked_amount),
-            staked_amount,
-        )
-    } else {
-        let total_locked_balance = state.total_deposit + state.pending_voting_rewards;
-        let staked_weight = load_token_balance(
-            &deps.querier,
-            deps.api.addr_humanize(&config.mirror_token)?.to_string(),
-            &state.contract_addr,
-        )?
-        .checked_sub(total_locked_balance)?;
-        (
-            Decimal::from_ratio(tallied_weight, staked_weight),
-            staked_weight,
-        )
-    };
+//     let (quorum, staked_weight) = if state.total_share.u128() == 0 {
+//         (Decimal::zero(), Uint128::zero())
+//     } else if let Some(staked_amount) = a_poll.staked_amount {
+//         (
+//             Decimal::from_ratio(tallied_weight, staked_amount),
+//             staked_amount,
+//         )
+//     } else {
+//         let total_locked_balance = state.total_deposit + state.pending_voting_rewards;
+//         let staked_weight = load_token_balance(
+//             &deps.querier,
+//             deps.api.addr_humanize(&config.mirror_token)?.to_string(),
+//             &state.contract_addr,
+//         )?
+//         .checked_sub(total_locked_balance)?;
+//         (
+//             Decimal::from_ratio(tallied_weight, staked_weight),
+//             staked_weight,
+//         )
+//     };
 
-    if tallied_weight == 0 || quorum < config.quorum {
-        // Quorum: More than quorum of the total staked tokens at the end of the voting
-        // period need to have participated in the vote.
-        rejected_reason = "Quorum not reached";
-    } else {
-        if yes != 0u128 && Decimal::from_ratio(yes, yes + no) > config.threshold {
-            //Threshold: More than 50% of the tokens that participated in the vote
-            // (after excluding “Abstain” votes) need to have voted in favor of the proposal (“Yes”).
-            poll_status = PollStatus::Passed;
-            passed = true;
-        } else {
-            rejected_reason = "Threshold not reached";
-        }
+//     if tallied_weight == 0 || quorum < config.quorum {
+//         // Quorum: More than quorum of the total staked tokens at the end of the voting
+//         // period need to have participated in the vote.
+//         rejected_reason = "Quorum not reached";
+//     } else {
+//         if yes != 0u128 && Decimal::from_ratio(yes, yes + no) > config.threshold {
+//             //Threshold: More than 50% of the tokens that participated in the vote
+//             // (after excluding “Abstain” votes) need to have voted in favor of the proposal (“Yes”).
+//             poll_status = PollStatus::Passed;
+//             passed = true;
+//         } else {
+//             rejected_reason = "Threshold not reached";
+//         }
 
-        // Refunds deposit only when quorum is reached
-        if !a_poll.deposit_amount.is_zero() {
-            messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
-                contract_addr: deps.api.addr_humanize(&config.mirror_token)?.to_string(),
-                funds: vec![],
-                msg: to_binary(&Cw20ExecuteMsg::Transfer {
-                    recipient: deps.api.addr_humanize(&a_poll.creator)?.to_string(),
-                    amount: a_poll.deposit_amount,
-                })?,
-            }))
-        }
-    }
+//         // Refunds deposit only when quorum is reached
+//         if !a_poll.deposit_amount.is_zero() {
+//             messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
+//                 contract_addr: deps.api.addr_humanize(&config.mirror_token)?.to_string(),
+//                 funds: vec![],
+//                 msg: to_binary(&Cw20ExecuteMsg::Transfer {
+//                     recipient: deps.api.addr_humanize(&a_poll.creator)?.to_string(),
+//                     amount: a_poll.deposit_amount,
+//                 })?,
+//             }))
+//         }
+//     }
 
-    // Decrease total deposit amount
-    state.total_deposit = state.total_deposit.checked_sub(a_poll.deposit_amount)?;
-    state_store(deps.storage).save(&state)?;
+//     // Decrease total deposit amount
+//     state.total_deposit = state.total_deposit.checked_sub(a_poll.deposit_amount)?;
+//     state_store(deps.storage).save(&state)?;
 
-    // Update poll indexer
-    poll_indexer_store(deps.storage, &PollStatus::InProgress).remove(&a_poll.id.to_be_bytes());
-    poll_indexer_store(deps.storage, &poll_status).save(&a_poll.id.to_be_bytes(), &true)?;
+//     // Update poll indexer
+//     poll_indexer_store(deps.storage, &PollStatus::InProgress).remove(&a_poll.id.to_be_bytes());
+//     poll_indexer_store(deps.storage, &poll_status).save(&a_poll.id.to_be_bytes(), &true)?;
 
-    // Update poll status
-    a_poll.status = poll_status;
-    a_poll.total_balance_at_end_poll = Some(staked_weight);
-    poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
+//     // Update poll status
+//     a_poll.status = poll_status;
+//     a_poll.total_balance_at_end_poll = Some(staked_weight);
+//     poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
 
-    Ok(Response::new().add_messages(messages).add_attributes(vec![
-        attr("action", "end_poll"),
-        attr("poll_id", &poll_id.to_string()),
-        attr("rejected_reason", rejected_reason),
-        attr("passed", &passed.to_string()),
-    ]))
-}
+//     Ok(Response::new().add_messages(messages).add_attributes(vec![
+//         attr("action", "end_poll"),
+//         attr("poll_id", &poll_id.to_string()),
+//         attr("rejected_reason", rejected_reason),
+//         attr("passed", &passed.to_string()),
+//     ]))
+// }
 
-/*
- * Execute a msg of passed poll.
- */
-pub fn execute_poll(deps: DepsMut, env: Env, poll_id: u64) -> StdResult<Response> {
-    let config: Config = config_read(deps.storage).load()?;
-    let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
+// /*
+//  * Execute a msg of passed poll.
+//  */
+// pub fn execute_poll(deps: DepsMut, env: Env, poll_id: u64) -> StdResult<Response> {
+//     let config: Config = config_read(deps.storage).load()?;
+//     let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
 
-    if a_poll.status != PollStatus::Passed {
-        return Err(StdError::generic_err("Poll is not in passed status"));
-    }
+//     if a_poll.status != PollStatus::Passed {
+//         return Err(StdError::generic_err("Poll is not in passed status"));
+//     }
 
-    let current_seconds = env.block.time.seconds();
-    if a_poll.end_time + config.effective_delay > current_seconds {
-        return Err(StdError::generic_err("Effective delay has not expired"));
-    }
+//     let current_seconds = env.block.time.seconds();
+//     if a_poll.end_time + config.effective_delay > current_seconds {
+//         return Err(StdError::generic_err("Effective delay has not expired"));
+//     }
 
-    poll_indexer_store(deps.storage, &PollStatus::Passed).remove(&poll_id.to_be_bytes());
-    poll_indexer_store(deps.storage, &PollStatus::Executed).save(&poll_id.to_be_bytes(), &true)?;
+//     poll_indexer_store(deps.storage, &PollStatus::Passed).remove(&poll_id.to_be_bytes());
+//     poll_indexer_store(deps.storage, &PollStatus::Executed).save(&poll_id.to_be_bytes(), &true)?;
 
-    a_poll.status = PollStatus::Executed;
-    poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
+//     a_poll.status = PollStatus::Executed;
+//     poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
 
-    let mut messages: Vec<SubMsg> = vec![];
-    if let Some(execute_data) = a_poll.execute_data {
-        messages.push(SubMsg {
-            msg: CosmosMsg::Wasm(WasmMsg::Execute {
-                contract_addr: deps.api.addr_humanize(&execute_data.contract)?.to_string(),
-                msg: execute_data.msg,
-                funds: vec![],
-            }),
-            gas_limit: None,
-            id: POLL_EXECUTE_REPLY_ID,
-            reply_on: ReplyOn::Error,
-        });
-        store_tmp_poll_id(deps.storage, a_poll.id)?;
-    } else {
-        return Err(StdError::generic_err("The poll does not have execute_data"));
-    }
+//     let mut messages: Vec<SubMsg> = vec![];
+//     if let Some(execute_data) = a_poll.execute_data {
+//         messages.push(SubMsg {
+//             msg: CosmosMsg::Wasm(WasmMsg::Execute {
+//                 contract_addr: deps.api.addr_humanize(&execute_data.contract)?.to_string(),
+//                 msg: execute_data.msg,
+//                 funds: vec![],
+//             }),
+//             gas_limit: None,
+//             id: POLL_EXECUTE_REPLY_ID,
+//             reply_on: ReplyOn::Error,
+//         });
+//         store_tmp_poll_id(deps.storage, a_poll.id)?;
+//     } else {
+//         return Err(StdError::generic_err("The poll does not have execute_data"));
+//     }
 
-    Ok(Response::new()
-        .add_submessages(messages)
-        .add_attributes(vec![
-            attr("action", "execute_poll"),
-            attr("poll_id", poll_id.to_string()),
-        ]))
-}
+//     Ok(Response::new()
+//         .add_submessages(messages)
+//         .add_attributes(vec![
+//             attr("action", "execute_poll"),
+//             attr("poll_id", poll_id.to_string()),
+//         ]))
+// }
 
-/*
- * If the executed message of a passed poll fails, it is marked as failed
- */
-pub fn failed_poll(deps: DepsMut, poll_id: u64) -> StdResult<Response> {
-    let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
+// /*
+//  * If the executed message of a passed poll fails, it is marked as failed
+//  */
+// pub fn failed_poll(deps: DepsMut, poll_id: u64) -> StdResult<Response> {
+//     let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
 
-    poll_indexer_store(deps.storage, &PollStatus::Executed).remove(&poll_id.to_be_bytes());
-    poll_indexer_store(deps.storage, &PollStatus::Failed).save(&poll_id.to_be_bytes(), &true)?;
+//     poll_indexer_store(deps.storage, &PollStatus::Executed).remove(&poll_id.to_be_bytes());
+//     poll_indexer_store(deps.storage, &PollStatus::Failed).save(&poll_id.to_be_bytes(), &true)?;
 
-    a_poll.status = PollStatus::Failed;
-    poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
+//     a_poll.status = PollStatus::Failed;
+//     poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
 
-    Ok(Response::new().add_attribute("action", "failed_poll"))
-}
+//     Ok(Response::new().add_attribute("action", "failed_poll"))
+// }
 
-/*
- * User casts a vote on the provided poll id
- */
-pub fn cast_vote(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    poll_id: u64,
-    vote: VoteOption,
-    amount: Uint128,
-) -> StdResult<Response> {
-    let sender_address_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
-    let config = config_read(deps.storage).load()?;
-    let state = state_read(deps.storage).load()?;
-    if poll_id == 0 || state.poll_count < poll_id {
-        return Err(StdError::generic_err("Poll does not exist"));
-    }
+// /*
+//  * User casts a vote on the provided poll id
+//  */
+// pub fn cast_vote(
+//     deps: DepsMut,
+//     env: Env,
+//     info: MessageInfo,
+//     poll_id: u64,
+//     vote: VoteOption,
+//     amount: Uint128,
+// ) -> StdResult<Response> {
+//     let sender_address_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
+//     let config = config_read(deps.storage).load()?;
+//     let state = state_read(deps.storage).load()?;
+//     if poll_id == 0 || state.poll_count < poll_id {
+//         return Err(StdError::generic_err("Poll does not exist"));
+//     }
 
-    let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
-    let current_seconds = env.block.time.seconds();
-    if a_poll.status != PollStatus::InProgress || env.block.height > current_seconds {
-        return Err(StdError::generic_err("Poll is not in progress"));
-    }
+//     let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
+//     let current_seconds = env.block.time.seconds();
+//     if a_poll.status != PollStatus::InProgress || env.block.height > current_seconds {
+//         return Err(StdError::generic_err("Poll is not in progress"));
+//     }
 
-    // Check the voter already has a vote on the poll
-    if poll_voter_read(deps.storage, poll_id)
-        .load(sender_address_raw.as_slice())
-        .is_ok()
-    {
-        return Err(StdError::generic_err("User has already voted."));
-    }
+//     // Check the voter already has a vote on the poll
+//     if poll_voter_read(deps.storage, poll_id)
+//         .load(sender_address_raw.as_slice())
+//         .is_ok()
+//     {
+//         return Err(StdError::generic_err("User has already voted."));
+//     }
 
-    let key = &sender_address_raw.as_slice();
-    let mut token_manager = bank_read(deps.storage).may_load(key)?.unwrap_or_default();
+//     let key = &sender_address_raw.as_slice();
+//     let mut token_manager = bank_read(deps.storage).may_load(key)?.unwrap_or_default();
 
-    // convert share to amount
-    let total_share = state.total_share;
-    let total_locked_balance = state.total_deposit + state.pending_voting_rewards;
-    let total_balance = load_token_balance(
-        &deps.querier,
-        deps.api.addr_humanize(&config.mirror_token)?.to_string(),
-        &state.contract_addr,
-    )?
-    .checked_sub(total_locked_balance)?;
+//     // convert share to amount
+//     let total_share = state.total_share;
+//     let total_locked_balance = state.total_deposit + state.pending_voting_rewards;
+//     let total_balance = load_token_balance(
+//         &deps.querier,
+//         deps.api.addr_humanize(&config.mirror_token)?.to_string(),
+//         &state.contract_addr,
+//     )?
+//     .checked_sub(total_locked_balance)?;
 
-    if token_manager
-        .share
-        .multiply_ratio(total_balance, total_share)
-        < amount
-    {
-        return Err(StdError::generic_err(
-            "User does not have enough staked tokens.",
-        ));
-    }
+//     if token_manager
+//         .share
+//         .multiply_ratio(total_balance, total_share)
+//         < amount
+//     {
+//         return Err(StdError::generic_err(
+//             "User does not have enough staked tokens.",
+//         ));
+//     }
 
-    // update tally info
-    match vote {
-        VoteOption::Yes => a_poll.yes_votes += amount,
-        VoteOption::No => a_poll.no_votes += amount,
-        VoteOption::Abstain => a_poll.abstain_votes += amount,
-    }
+//     // update tally info
+//     match vote {
+//         VoteOption::Yes => a_poll.yes_votes += amount,
+//         VoteOption::No => a_poll.no_votes += amount,
+//         VoteOption::Abstain => a_poll.abstain_votes += amount,
+//     }
 
-    let vote_info = VoterInfo {
-        vote,
-        balance: amount,
-    };
-    token_manager
-        .locked_balance
-        .push((poll_id, vote_info.clone()));
-    token_manager.participated_polls = vec![];
-    bank_store(deps.storage).save(key, &token_manager)?;
+//     let vote_info = VoterInfo {
+//         vote,
+//         balance: amount,
+//     };
+//     token_manager
+//         .locked_balance
+//         .push((poll_id, vote_info.clone()));
+//     token_manager.participated_polls = vec![];
+//     bank_store(deps.storage).save(key, &token_manager)?;
 
-    // store poll voter && and update poll data
-    poll_voter_store(deps.storage, poll_id).save(sender_address_raw.as_slice(), &vote_info)?;
+//     // store poll voter && and update poll data
+//     poll_voter_store(deps.storage, poll_id).save(sender_address_raw.as_slice(), &vote_info)?;
 
-    // processing snapshot
-    let current_seconds = env.block.time.seconds();
-    let time_to_end = a_poll.end_time - current_seconds;
+//     // processing snapshot
+//     let current_seconds = env.block.time.seconds();
+//     let time_to_end = a_poll.end_time - current_seconds;
 
-    if time_to_end < config.snapshot_period && a_poll.staked_amount.is_none() {
-        a_poll.staked_amount = Some(total_balance);
-    }
+//     if time_to_end < config.snapshot_period && a_poll.staked_amount.is_none() {
+//         a_poll.staked_amount = Some(total_balance);
+//     }
 
-    poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
+//     poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
 
-    let attributes = vec![
-        attr("action", "cast_vote"),
-        attr("poll_id", &poll_id.to_string()),
-        attr("amount", &amount.to_string()),
-        attr("voter", &info.sender.to_string()),
-        attr("vote_option", vote_info.vote.to_string()),
-    ];
+//     let attributes = vec![
+//         attr("action", "cast_vote"),
+//         attr("poll_id", &poll_id.to_string()),
+//         attr("amount", &amount.to_string()),
+//         attr("voter", &info.sender.to_string()),
+//         attr("vote_option", vote_info.vote.to_string()),
+//     ];
 
-    Ok(Response::new().add_attributes(attributes))
-}
+//     Ok(Response::new().add_attributes(attributes))
+// }
 
-/*
- * SnapshotPoll is used to take a snapshot of the staked amount for quorum calculation
- */
-pub fn snapshot_poll(deps: DepsMut, env: Env, poll_id: u64) -> StdResult<Response> {
-    let config: Config = config_read(deps.storage).load()?;
-    let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
+// /*
+//  * SnapshotPoll is used to take a snapshot of the staked amount for quorum calculation
+//  */
+// pub fn snapshot_poll(deps: DepsMut, env: Env, poll_id: u64) -> StdResult<Response> {
+//     let config: Config = config_read(deps.storage).load()?;
+//     let mut a_poll: Poll = poll_store(deps.storage).load(&poll_id.to_be_bytes())?;
 
-    if a_poll.status != PollStatus::InProgress {
-        return Err(StdError::generic_err("Poll is not in progress"));
-    }
+//     if a_poll.status != PollStatus::InProgress {
+//         return Err(StdError::generic_err("Poll is not in progress"));
+//     }
 
-    let current_seconds = env.block.time.seconds();
-    let time_to_end = a_poll.end_time - current_seconds;
+//     let current_seconds = env.block.time.seconds();
+//     let time_to_end = a_poll.end_time - current_seconds;
 
-    if time_to_end > config.snapshot_period {
-        return Err(StdError::generic_err("Cannot snapshot at this height"));
-    }
+//     if time_to_end > config.snapshot_period {
+//         return Err(StdError::generic_err("Cannot snapshot at this height"));
+//     }
 
-    if a_poll.staked_amount.is_some() {
-        return Err(StdError::generic_err("Snapshot has already occurred"));
-    }
+//     if a_poll.staked_amount.is_some() {
+//         return Err(StdError::generic_err("Snapshot has already occurred"));
+//     }
 
-    // store the current staked amount for quorum calculation
-    let state: State = state_store(deps.storage).load()?;
+//     // store the current staked amount for quorum calculation
+//     let state: State = state_store(deps.storage).load()?;
 
-    let total_locked_balance = state.total_deposit + state.pending_voting_rewards;
-    let staked_amount = load_token_balance(
-        &deps.querier,
-        deps.api.addr_humanize(&config.mirror_token)?.to_string(),
-        &state.contract_addr,
-    )?
-    .checked_sub(total_locked_balance)?;
+//     let total_locked_balance = state.total_deposit + state.pending_voting_rewards;
+//     let staked_amount = load_token_balance(
+//         &deps.querier,
+//         deps.api.addr_humanize(&config.mirror_token)?.to_string(),
+//         &state.contract_addr,
+//     )?
+//     .checked_sub(total_locked_balance)?;
 
-    a_poll.staked_amount = Some(staked_amount);
+//     a_poll.staked_amount = Some(staked_amount);
 
-    poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
+//     poll_store(deps.storage).save(&poll_id.to_be_bytes(), &a_poll)?;
 
-    Ok(Response::new().add_attributes(vec![
-        attr("action", "snapshot_poll"),
-        attr("poll_id", poll_id.to_string()),
-        attr("staked_amount", staked_amount),
-    ]))
-}
+//     Ok(Response::new().add_attributes(vec![
+//         attr("action", "snapshot_poll"),
+//         attr("poll_id", poll_id.to_string()),
+//         attr("staked_amount", staked_amount),
+//     ]))
+// }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
