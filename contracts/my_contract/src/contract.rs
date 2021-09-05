@@ -9,11 +9,19 @@ use crate::querier::load_token_balance;
 //     deposit_reward, query_shares, query_staker, stake_voting_rewards, stake_voting_tokens,
 //     withdraw_voting_rewards, withdraw_voting_tokens,
 // };
-use crate::state::{
-    bank_read, bank_store, config_read, config_store, poll_indexer_store, poll_read, poll_store,
-    poll_voter_read, poll_voter_store, read_poll_voters, read_polls, read_tmp_poll_id, state_read,
-    state_store, store_tmp_poll_id, Config, ExecuteData, Event, Wager, Status, WagerOption, State,
+// use crate::state::{
+//     bank_read, bank_store, config_read, config_store, poll_indexer_store, poll_read, poll_store,
+//     poll_voter_read, poll_voter_store, read_poll_voters, read_polls, read_tmp_poll_id, state_read,
+//     state_store, store_tmp_poll_id, Config, ExecuteData, Event, Wager, Status, WagerOption, State,
+// };
+
+use crate::state:: {
+    config_read, config_store, state_read, state_store, Config, ExecuteData, Event, Wager, Status, WagerOption, State
 };
+
+// use crate::state:: {
+//     Config, ExecuteData, Event, Wager, Status, WagerOption, State
+// };
 
 use cosmwasm_std::{
     attr, from_binary, to_binary, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo,
@@ -23,7 +31,7 @@ use cosmwasm_std::{
 use cw20::{Cw20ExecuteMsg, Cw20ReceiveMsg};
 
 use mirror_protocol::common::OrderBy;
-use mirror_protocol::gov::{
+use mirror_protocol::my_contract::{
     ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, MigrateMsg, PollExecuteMsg,
     PollResponse, PollStatus, PollsResponse, QueryMsg, StateResponse, VoteOption, VoterInfo,
     VotersResponse, VotersResponseItem,
@@ -33,6 +41,9 @@ use terraswap::{
     asset::{Asset, AssetInfo}, 
     querier::query_balance, 
 };
+
+// TODO: Question: is this the right way of accessing state 
+use crate::state::EVENTS;
 
 // const MIN_TITLE_LENGTH: usize = 4;
 // const MAX_TITLE_LENGTH: usize = 64;
@@ -78,9 +89,13 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
     match msg {
         // ExecuteMsg::Receive(msg) => receive_cw20(deps, env, info, msg),
         ExecuteMsg::UpdateConfig {
-            owner
+            owner,
+            lux_token,
         } => update_config(
-            owner
+            deps,
+            info,
+            owner,
+            lux_token
         ),
         ExecuteMsg::CreateEvent { 
             event_id,
@@ -90,19 +105,19 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             end_time,
             expiration_date,
             owner       
-        } => create_event(deps, info, event_id, strike_price, asset_name, start_time, end_time, expiration_date, owner),
+        } => create_event(deps, env, info, event_id, strike_price, asset_name, start_time, end_time, expiration_date),
         ExecuteMsg::DepositWager { 
             user_addr,
             event_id,
             amount,
             wager_option 
         } => {
-            deposit_wager(deps, info, user_addr, event_id, amount, wager_option)
+            deposit_wager(deps, env, info, event_id, amount, wager_option)
         }
         ExecuteMsg::ClaimReward { 
             user_addr,
             event_id 
-        } => claim_reward(deps, info, user_addr, event_id),
+        } => claim_reward(deps, env, info, event_id),
     }
 }
 
@@ -217,9 +232,8 @@ pub fn claim_reward(
     deps: DepsMut,
     env: Env, 
     info: MessageInfo, 
-    // user_addr: CanonicalAddr,
     event_id: u64, 
-) -> StdResult<u64> {
+) -> StdResult<Response> {
 
     let user_addr = deps.api.addr_canonicalize(info.sender.as_str())?;
 
@@ -260,12 +274,12 @@ pub fn claim_reward(
     // create the native asset, add to message with into_msg
     let reward_asset = Asset {
         info: AssetInfo::NativeToken {
-            denom: "uust"
+            denom: "uust".to_string()
         },
         amount: Uint128::from(winning_shares)
     };
 
-    if reward_asset.is_zero() {
+    if reward_asset.amount == Uint128::zero() {
         return Err(StdError::generic_err(
             "No winning shares and claimable rewards"
         ));
@@ -361,10 +375,10 @@ pub fn update_config(
             config.owner = api.addr_canonicalize(&owner)?;
         }
 
-        if let Some(lux_token) = lux_token {
-            validate_lux_token(lux_token)?;
-            config.lux_token = lux_token;
-        }
+        // if let Some(lux_token) = lux_token {
+        //     validate_lux_token(lux_token)?;
+        //     config.lux_token = lux_token;
+        // }
         Ok(config)
     })?;
     Ok(Response::default())
@@ -372,7 +386,7 @@ pub fn update_config(
 
 // validate_lux_token returns an error if the token is invalid 
 fn validate_lux_token(lux_token: String) -> StdResult<()> {
-    Ok()
+    Ok(())
 }
 
 /*
@@ -768,181 +782,183 @@ fn validate_lux_token(lux_token: String) -> StdResult<()> {
 //     ]))
 // }
 
-#[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
-    match msg {
-        QueryMsg::Config {} => to_binary(&query_config(deps)?),
-        QueryMsg::State {} => to_binary(&query_state(deps)?),
-        QueryMsg::Staker { address } => to_binary(&query_staker(deps, address)?),
-        QueryMsg::Poll { poll_id } => to_binary(&query_poll(deps, poll_id)?),
-        QueryMsg::Polls {
-            filter,
-            start_after,
-            limit,
-            order_by,
-        } => to_binary(&query_polls(deps, filter, start_after, limit, order_by)?),
-        QueryMsg::Voter { poll_id, address } => to_binary(&query_voter(deps, poll_id, address)?),
-        QueryMsg::Voters {
-            poll_id,
-            start_after,
-            limit,
-            order_by,
-        } => to_binary(&query_voters(deps, poll_id, start_after, limit, order_by)?),
-        QueryMsg::Shares {
-            start_after,
-            limit,
-            order_by,
-        } => to_binary(&query_shares(deps, start_after, limit, order_by)?),
-    }
-}
 
-fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
-    let config: Config = config_read(deps.storage).load()?;
-    Ok(ConfigResponse {
-        owner: deps.api.addr_humanize(&config.owner)?.to_string(),
-        mirror_token: deps.api.addr_humanize(&config.mirror_token)?.to_string(),
-        quorum: config.quorum,
-        threshold: config.threshold,
-        voting_period: config.voting_period,
-        effective_delay: config.effective_delay,
-        proposal_deposit: config.proposal_deposit,
-        voter_weight: config.voter_weight,
-        snapshot_period: config.snapshot_period,
-    })
-}
+// TODO: QUERY STUFF
+// #[cfg_attr(not(feature = "library"), entry_point)]
+// pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+//     match msg {
+//         QueryMsg::Config {} => to_binary(&query_config(deps)?),
+//         QueryMsg::State {} => to_binary(&query_state(deps)?),
+//         QueryMsg::Staker { address } => to_binary(&query_staker(deps, address)?),
+//         QueryMsg::Poll { poll_id } => to_binary(&query_poll(deps, poll_id)?),
+//         QueryMsg::Polls {
+//             filter,
+//             start_after,
+//             limit,
+//             order_by,
+//         } => to_binary(&query_polls(deps, filter, start_after, limit, order_by)?),
+//         QueryMsg::Voter { poll_id, address } => to_binary(&query_voter(deps, poll_id, address)?),
+//         QueryMsg::Voters {
+//             poll_id,
+//             start_after,
+//             limit,
+//             order_by,
+//         } => to_binary(&query_voters(deps, poll_id, start_after, limit, order_by)?),
+//         QueryMsg::Shares {
+//             start_after,
+//             limit,
+//             order_by,
+//         } => to_binary(&query_shares(deps, start_after, limit, order_by)?),
+//     }
+// }
 
-fn query_state(deps: Deps) -> StdResult<StateResponse> {
-    let state: State = state_read(deps.storage).load()?;
-    Ok(StateResponse {
-        poll_count: state.poll_count,
-        total_share: state.total_share,
-        total_deposit: state.total_deposit,
-        pending_voting_rewards: state.pending_voting_rewards,
-    })
-}
+// fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
+//     let config: Config = config_read(deps.storage).load()?;
+//     Ok(ConfigResponse {
+//         owner: deps.api.addr_humanize(&config.owner)?.to_string(),
+//         mirror_token: deps.api.addr_humanize(&config.mirror_token)?.to_string(),
+//         quorum: config.quorum,
+//         threshold: config.threshold,
+//         voting_period: config.voting_period,
+//         effective_delay: config.effective_delay,
+//         proposal_deposit: config.proposal_deposit,
+//         voter_weight: config.voter_weight,
+//         snapshot_period: config.snapshot_period,
+//     })
+// }
 
-fn query_poll(deps: Deps, poll_id: u64) -> StdResult<PollResponse> {
-    let poll = match poll_read(deps.storage).may_load(&poll_id.to_be_bytes())? {
-        Some(poll) => Some(poll),
-        None => return Err(StdError::generic_err("Poll does not exist")),
-    }
-    .unwrap();
+// fn query_state(deps: Deps) -> StdResult<StateResponse> {
+//     let state: State = state_read(deps.storage).load()?;
+//     Ok(StateResponse {
+//         poll_count: state.poll_count,
+//         total_share: state.total_share,
+//         total_deposit: state.total_deposit,
+//         pending_voting_rewards: state.pending_voting_rewards,
+//     })
+// }
 
-    Ok(PollResponse {
-        id: poll.id,
-        creator: deps.api.addr_humanize(&poll.creator).unwrap().to_string(),
-        status: poll.status,
-        end_time: poll.end_time,
-        title: poll.title,
-        description: poll.description,
-        link: poll.link,
-        deposit_amount: poll.deposit_amount,
-        execute_data: if let Some(execute_data) = poll.execute_data {
-            Some(PollExecuteMsg {
-                contract: deps.api.addr_humanize(&execute_data.contract)?.to_string(),
-                msg: execute_data.msg,
-            })
-        } else {
-            None
-        },
-        yes_votes: poll.yes_votes,
-        no_votes: poll.no_votes,
-        abstain_votes: poll.abstain_votes,
-        total_balance_at_end_poll: poll.total_balance_at_end_poll,
-        voters_reward: poll.voters_reward,
-        staked_amount: poll.staked_amount,
-    })
-}
+// fn query_poll(deps: Deps, poll_id: u64) -> StdResult<PollResponse> {
+//     let poll = match poll_read(deps.storage).may_load(&poll_id.to_be_bytes())? {
+//         Some(poll) => Some(poll),
+//         None => return Err(StdError::generic_err("Poll does not exist")),
+//     }
+//     .unwrap();
 
-fn query_polls(
-    deps: Deps,
-    filter: Option<PollStatus>,
-    start_after: Option<u64>,
-    limit: Option<u32>,
-    order_by: Option<OrderBy>,
-) -> StdResult<PollsResponse> {
-    let polls = read_polls(deps.storage, filter, start_after, limit, order_by, None)?;
-    let poll_responses: StdResult<Vec<PollResponse>> = polls
-        .iter()
-        .map(|poll| {
-            Ok(PollResponse {
-                id: poll.id,
-                creator: deps.api.addr_humanize(&poll.creator).unwrap().to_string(),
-                status: poll.status.clone(),
-                end_time: poll.end_time,
-                title: poll.title.to_string(),
-                description: poll.description.to_string(),
-                link: poll.link.clone(),
-                deposit_amount: poll.deposit_amount,
-                execute_data: if let Some(execute_data) = poll.execute_data.clone() {
-                    Some(PollExecuteMsg {
-                        contract: deps.api.addr_humanize(&execute_data.contract)?.to_string(),
-                        msg: execute_data.msg,
-                    })
-                } else {
-                    None
-                },
-                yes_votes: poll.yes_votes,
-                no_votes: poll.no_votes,
-                abstain_votes: poll.abstain_votes,
-                total_balance_at_end_poll: poll.total_balance_at_end_poll,
-                voters_reward: poll.voters_reward,
-                staked_amount: poll.staked_amount,
-            })
-        })
-        .collect();
+//     Ok(PollResponse {
+//         id: poll.id,
+//         creator: deps.api.addr_humanize(&poll.creator).unwrap().to_string(),
+//         status: poll.status,
+//         end_time: poll.end_time,
+//         title: poll.title,
+//         description: poll.description,
+//         link: poll.link,
+//         deposit_amount: poll.deposit_amount,
+//         execute_data: if let Some(execute_data) = poll.execute_data {
+//             Some(PollExecuteMsg {
+//                 contract: deps.api.addr_humanize(&execute_data.contract)?.to_string(),
+//                 msg: execute_data.msg,
+//             })
+//         } else {
+//             None
+//         },
+//         yes_votes: poll.yes_votes,
+//         no_votes: poll.no_votes,
+//         abstain_votes: poll.abstain_votes,
+//         total_balance_at_end_poll: poll.total_balance_at_end_poll,
+//         voters_reward: poll.voters_reward,
+//         staked_amount: poll.staked_amount,
+//     })
+// }
 
-    Ok(PollsResponse {
-        polls: poll_responses?,
-    })
-}
+// fn query_polls(
+//     deps: Deps,
+//     filter: Option<PollStatus>,
+//     start_after: Option<u64>,
+//     limit: Option<u32>,
+//     order_by: Option<OrderBy>,
+// ) -> StdResult<PollsResponse> {
+//     let polls = read_polls(deps.storage, filter, start_after, limit, order_by, None)?;
+//     let poll_responses: StdResult<Vec<PollResponse>> = polls
+//         .iter()
+//         .map(|poll| {
+//             Ok(PollResponse {
+//                 id: poll.id,
+//                 creator: deps.api.addr_humanize(&poll.creator).unwrap().to_string(),
+//                 status: poll.status.clone(),
+//                 end_time: poll.end_time,
+//                 title: poll.title.to_string(),
+//                 description: poll.description.to_string(),
+//                 link: poll.link.clone(),
+//                 deposit_amount: poll.deposit_amount,
+//                 execute_data: if let Some(execute_data) = poll.execute_data.clone() {
+//                     Some(PollExecuteMsg {
+//                         contract: deps.api.addr_humanize(&execute_data.contract)?.to_string(),
+//                         msg: execute_data.msg,
+//                     })
+//                 } else {
+//                     None
+//                 },
+//                 yes_votes: poll.yes_votes,
+//                 no_votes: poll.no_votes,
+//                 abstain_votes: poll.abstain_votes,
+//                 total_balance_at_end_poll: poll.total_balance_at_end_poll,
+//                 voters_reward: poll.voters_reward,
+//                 staked_amount: poll.staked_amount,
+//             })
+//         })
+//         .collect();
 
-fn query_voter(deps: Deps, poll_id: u64, address: String) -> StdResult<VotersResponseItem> {
-    let voter: VoterInfo = poll_voter_read(deps.storage, poll_id)
-        .load(deps.api.addr_canonicalize(&address)?.as_slice())?;
-    Ok(VotersResponseItem {
-        voter: address,
-        vote: voter.vote,
-        balance: voter.balance,
-    })
-}
+//     Ok(PollsResponse {
+//         polls: poll_responses?,
+//     })
+// }
 
-fn query_voters(
-    deps: Deps,
-    poll_id: u64,
-    start_after: Option<String>,
-    limit: Option<u32>,
-    order_by: Option<OrderBy>,
-) -> StdResult<VotersResponse> {
-    let voters = if let Some(start_after) = start_after {
-        read_poll_voters(
-            deps.storage,
-            poll_id,
-            Some(deps.api.addr_canonicalize(&start_after)?),
-            limit,
-            order_by,
-        )?
-    } else {
-        read_poll_voters(deps.storage, poll_id, None, limit, order_by)?
-    };
+// fn query_voter(deps: Deps, poll_id: u64, address: String) -> StdResult<VotersResponseItem> {
+//     let voter: VoterInfo = poll_voter_read(deps.storage, poll_id)
+//         .load(deps.api.addr_canonicalize(&address)?.as_slice())?;
+//     Ok(VotersResponseItem {
+//         voter: address,
+//         vote: voter.vote,
+//         balance: voter.balance,
+//     })
+// }
 
-    let voters_response: StdResult<Vec<VotersResponseItem>> = voters
-        .iter()
-        .map(|voter_info| {
-            Ok(VotersResponseItem {
-                voter: deps.api.addr_humanize(&voter_info.0)?.to_string(),
-                vote: voter_info.1.vote.clone(),
-                balance: voter_info.1.balance,
-            })
-        })
-        .collect();
+// fn query_voters(
+//     deps: Deps,
+//     poll_id: u64,
+//     start_after: Option<String>,
+//     limit: Option<u32>,
+//     order_by: Option<OrderBy>,
+// ) -> StdResult<VotersResponse> {
+//     let voters = if let Some(start_after) = start_after {
+//         read_poll_voters(
+//             deps.storage,
+//             poll_id,
+//             Some(deps.api.addr_canonicalize(&start_after)?),
+//             limit,
+//             order_by,
+//         )?
+//     } else {
+//         read_poll_voters(deps.storage, poll_id, None, limit, order_by)?
+//     };
 
-    Ok(VotersResponse {
-        voters: voters_response?,
-    })
-}
+//     let voters_response: StdResult<Vec<VotersResponseItem>> = voters
+//         .iter()
+//         .map(|voter_info| {
+//             Ok(VotersResponseItem {
+//                 voter: deps.api.addr_humanize(&voter_info.0)?.to_string(),
+//                 vote: voter_info.1.vote.clone(),
+//                 balance: voter_info.1.balance,
+//             })
+//         })
+//         .collect();
 
-#[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> StdResult<Response> {
-    Ok(Response::default())
-}
+//     Ok(VotersResponse {
+//         voters: voters_response?,
+//     })
+// }
+
+// #[cfg_attr(not(feature = "library"), entry_point)]
+// pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> StdResult<Response> {
+//     Ok(Response::default())
+// }
