@@ -51,8 +51,8 @@ pub trait MapTrait {
     type Map;
 }
 
-//pub const EVENTS: Storage::Map<&[u8], Event> = Storage::Map::new(b"events");
-pub const EVENTS: <(dyn Storage + 'static) as MapTrait>::Map = Storage::Map::new(b"events");
+pub const EVENTS: Storage::Map<&[u8], Event> = Storage::Map::new(b"events");
+// pub const EVENTS: <(dyn Storage + 'static) as MapTrait>::Map = Storage::Map::new(b"events");
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Event<'a> {

@@ -214,7 +214,12 @@ pub fn deposit_wager(
         // }
     };
 
+    // calculate the number of shares 
+    let event = EVENTS.may_load(&deps.storage, event_id)?;
+    let q = event.WAGERS; 
+
     // TODO: Question: does event_id need to be turned to bytecode? 
+    
     EVENTS.update(&mut deps.storage, event_id, updateEvents);
 
     let r = Response::new().add_attributes(vec![
@@ -227,6 +232,20 @@ pub fn deposit_wager(
     Ok(r)
 
 }
+
+pub fn lmsr(_alph: f64, q:Vec<f64>) -> f64 {
+    let mut b: f64 = 0.0;
+    for x in q.iter() {
+       b += x;
+    }
+    b = b * _alph;
+    let mut sum : f64 = 0.0;
+    for x in q.iter() {
+        sum += exp(x/b);
+    }
+    let price: f64 = b * log10(sum);
+    price
+ }
 
 pub fn claim_reward(
     deps: DepsMut,
