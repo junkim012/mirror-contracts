@@ -3,6 +3,7 @@ use cosmwasm_storage::{
     bucket, bucket_read, singleton, singleton_read, Bucket, ReadonlyBucket, ReadonlySingleton,
     Singleton,
 };
+use cw_storage_plus::Map;
 
 
 
@@ -47,11 +48,11 @@ pub struct State {
 
 // TODO: global variable for keeping track of EVENTS
 // Map<event_id, Event> 
-pub trait MapTrait {
-    type Map;
-}
+// pub trait MapTrait {
+//     type Map;
+// }
 
-pub const EVENTS: Storage::Map<&[u8], Event> = Storage::Map::new(b"events");
+pub const EVENTS: Map<&[u8], Event> = Map::new(b"events");
 // pub const EVENTS: <(dyn Storage + 'static) as MapTrait>::Map = Storage::Map::new(b"events");
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
